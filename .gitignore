@@ -1,2 +1,4 @@
 .venv/
 config/stanford-corenlp-4.5.7/stanford-corenlp-4.5.7-models.jar
+.vscode/
+__pycache__/
