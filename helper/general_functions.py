@@ -1,12 +1,14 @@
 import os
+import string
+import ast
+import re
 import csv
 import ast
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-import json
+from nltk import word_tokenize
+from nltk.corpus import stopwords
 import openpyxl
-from helper.utils import clean_text
 
 
 def split_text(text, max_length=300):
@@ -27,8 +29,8 @@ def split_text(text, max_length=300):
         print("split_text", text)
     return chunks
 
-def create_and_write_csv(file_name, data, method_name):   
-    dictory_path = "model/DeepCGSR/feature"
+def create_and_write_csv(file_name, data):   
+    dictory_path = "feature"
     filename = os.path.join(dictory_path, file_name + '.csv')
     with open(filename, mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -54,6 +56,17 @@ def load_data_from_csv(file_path):
                 data[key] = array
     return data
 
+def parse_array_from_string(array_string):
+    try:
+        if isinstance(array_string, (int, float)):
+            return [float(array_string)]
+
+        array_string = array_string.strip()
+        array_string = re.sub(r'(?<![\d.])e[\d.]+', '', array_string)
+        return ast.literal_eval(array_string)
+    except (ValueError, SyntaxError):
+        return []
+    
 def read_csv_file(csv_file):
     keys = []
     values = []
@@ -70,25 +83,43 @@ def read_csv_file(csv_file):
 
     return keys, values
 
-def read_and_split_dataset(file_path, train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15, random_state=None):
-    assert train_ratio + valid_ratio + test_ratio == 1.0, "Train, validation and test ratios must sum to 1.0"
 
-    with open(file_path, 'r') as file:
-        data = json.load(file)
-    df = pd.DataFrame(data)
-    train_df, remaining_df = train_test_split(df, train_size=train_ratio, random_state=random_state)
-    remaining_ratio = valid_ratio / (valid_ratio + test_ratio)
-    valid_df, test_df = train_test_split(remaining_df, train_size=remaining_ratio, random_state=random_state)
-    return train_df, valid_df, test_df
+def softmax(x):
+    """Compute the softmax of vector x.
+    """
+    exp_x = np.exp(x)
+    softmax_x = exp_x / np.sum(exp_x)
+    return softmax_x
 
-def read_and_split_csv_dataset(file_path, train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15, random_state=None):
 
-    assert train_ratio + valid_ratio + test_ratio == 1.0, "Train, validation and test ratios must sum to 1.0"
-    df = pd.read_csv(file_path)
-    train_df, remaining_df = train_test_split(df, train_size=train_ratio, random_state=random_state)
-    remaining_ratio = valid_ratio / (valid_ratio + test_ratio)
-    valid_df, test_df = train_test_split(remaining_df, train_size=remaining_ratio, random_state=random_state)
-    return train_df, valid_df, test_df
+def sigmoid(x):
+    x = np.clip(x, -709, 709)
+    s = 1 / (1 + np.exp(-x))
+    return s
+
+stop_words = stopwords.words("english") + list(string.punctuation)
+def word_segment(text):
+    if pd.isnull(text):
+        return [] 
+    word_seg = word_tokenize(str(text).lower()) 
+    
+    return word_seg
+
+def preprocessed(text):
+    return text.split("\.")
+
+def clean_text(text):
+    text = re.sub(r'\.{2,}', ' ', text)
+    return text
+    
+def format_array(arr):
+    return "[" + ", ".join(map(str, arr)) + "]"
+
+def convert_string_to_float_list(string):
+    try:
+        return np.array(ast.literal_eval(string), dtype=np.float64)
+    except:
+        return np.array([])
 
 def save_to_excel(values, headers, output_path):
     if os.path.exists(output_path):

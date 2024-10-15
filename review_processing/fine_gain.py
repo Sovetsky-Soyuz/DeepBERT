@@ -1,15 +1,11 @@
-
 import numpy as np
 import torch
-import sys
 import os
-import pandas as pd
 from tqdm import tqdm
-from gensim import corpora
 from nltk.corpus import sentiwordnet as swn
 from sklearn.cluster import KMeans, Birch, DBSCAN, MeanShift, BisectingKMeans
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from transformers import BertTokenizer, BertModel
+from sklearn.feature_extraction.text import TfidfVectorizer
+from transformers import BertTokenizer
 
 from transformers import BertTokenizer, BertForSequenceClassification
 from torch.optim import AdamW
@@ -17,7 +13,8 @@ from torch.utils.data import DataLoader, Dataset
 from torch.nn.utils.rnn import pad_sequence
 from nltk.corpus import wordnet as wn
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from helper.utils import preprocessed, word_segment
+
+from helper.general_functions import preprocessed, word_segment
 
 
 class CustomDataset(Dataset):
@@ -38,7 +35,7 @@ class CustomDataset(Dataset):
             text,
             add_special_tokens=True,
             max_length=self.max_len,
-            padding='max_length',  # Tự động padding các chuỗi văn bản ngắn hơn max_len
+            padding='max_length',
             truncation=True,  # Cắt bớt các chuỗi dài hơn max_len
             return_attention_mask=True,
             return_tensors='pt',
@@ -56,7 +53,6 @@ def collate_fn(tokenizer):
         attention_mask = [item['attention_mask'] for item in batch]
         labels = [item['labels'] for item in batch]
         
-        # Pad input_ids và attention_mask đến kích thước của chuỗi dài nhất trong batch
         input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id)
         attention_mask = pad_sequence(attention_mask, batch_first=True, padding_value=0)
         
@@ -69,8 +65,7 @@ def collate_fn(tokenizer):
         }
     return collate_batch
 
-
-def fine_tune_bert(texts, labels, num_labels, epochs=50, batch_size=8, max_len=512, learning_rate=2e-5, save_dir='./model/DeepCGSR/chkpt'):
+def fine_tune_bert(texts, labels, num_labels, epochs=50, batch_size=8, max_len=512, learning_rate=2e-5, save_dir='./chkpt'):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -136,10 +131,9 @@ def get_bert_embeddings(texts, tokenizer, model, device):
 
 def get_tbert_model(data_df, split_data, num_topics, num_words, cluster_method='Kmeans'):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
     cleaned_data = data_df.dropna(subset=['filteredReviewText', 'overall_new'])
-    cleaned_data['overall_new'] = cleaned_data['overall_new'].apply(lambda x: 1 if x > 3 else 0)
+    cleaned_data['overall_new'] = cleaned_data['overall_new'].apply(lambda x: x - 1)
 
     texts = cleaned_data['filteredReviewText'].tolist()
     labels = cleaned_data['overall_new'].tolist()
@@ -169,7 +163,7 @@ def get_tbert_model(data_df, split_data, num_topics, num_words, cluster_method='
         clustering = MeanShift(bandwidth=num_topics).fit(embeddings.cpu().numpy())
     elif cluster_method == 'BisectingKMeans':
         print("BisectingKMeans")
-        clustering = BisectingKMeans(n_clusters=num_topics, random_state=0).fit(embeddings.cpu().numpy())
+        clustering = BisectingKMeans(n_clusters=num_topics, random_state=42).fit(embeddings.cpu().numpy())
 
     labels = clustering.labels_
 
@@ -183,7 +177,7 @@ def get_tbert_model(data_df, split_data, num_topics, num_words, cluster_method='
             print(f"No valid texts in cluster {i}, skipping.")
             topic_to_words.append([])
             continue
-
+        
         vectorizer = TfidfVectorizer(max_features=num_words, stop_words='english')
         
         try:
@@ -201,10 +195,9 @@ def get_tbert_model(data_df, split_data, num_topics, num_words, cluster_method='
         feature_names = vectorizer.get_feature_names_out()
         top_words = [feature_names[ind] for ind in indices[:num_words]]
         topic_to_words.append(top_words)
+    # print("topic_to_words: ", topic_to_words)
     
-    dictionary = corpora.Dictionary(split_data)
-    
-    return embeddings, model, clustering, dictionary, tokenizer, topic_to_words
+    return model, tokenizer, topic_to_words
 
 
 analyzer = SentimentIntensityAnalyzer()
@@ -234,10 +227,7 @@ def get_word_sentiment_score(word):
     if not m:
         return s  # Trả về 0 nếu không tìm thấy synset nào cho từ này
     for synset in m:
-        if synset.pos_score() == 0 and synset.neg_score() == 0:
-            s += get_word_sentiment_score_by_vader(synset.synset.name().split('.')[0])
-        else:
-            s += (synset.pos_score() - synset.neg_score())
+        s += get_word_sentiment_score_by_vader(synset.synset.name().split('.')[0])
     return s
 
 def get_synonyms_sentiment_scores(word, top_n=4):
@@ -252,8 +242,7 @@ def get_synonyms_sentiment_scores(word, top_n=4):
     return scores
 
 def get_topic_sentiment_matrix_tbert(text, topic_word_matrix, dependency_parser, topic_nums=50):
-    topic_sentiment_m = torch.zeros(topic_nums, device=device)  # Đảm bảo ma trận sentiment ở trên GPU
-
+    topic_sentiment_m = torch.zeros(topic_nums, device=device)
     try:
         sentences = preprocessed(text)
         dep_parser_result_p = []
@@ -274,11 +263,11 @@ def get_topic_sentiment_matrix_tbert(text, topic_word_matrix, dependency_parser,
                         if p[1] == word:
                             cur_topic_senti_word.append(p[0])
 
-            if cur_topic_senti_word:  # Kiểm tra nếu danh sách không rỗng
+            if cur_topic_senti_word: 
                 cur_topic_sentiment = sum(get_synonyms_sentiment_scores(senti_word) for senti_word in cur_topic_senti_word)
-                topic_sentiment_m[topic_id] = torch.tensor(np.clip(cur_topic_sentiment, -5, 5), device=device)  # Chuyển sang GPU
+                topic_sentiment_m[topic_id] = torch.tensor(np.clip(cur_topic_sentiment, -5, 5), device=device)
             else:
-                topic_sentiment_m[topic_id] = torch.tensor(0, device=device)  # Chuyển giá trị mặc định sang GPU
+                topic_sentiment_m[topic_id] = torch.tensor(0, device=device) 
                 
         return topic_sentiment_m
     except Exception as e:

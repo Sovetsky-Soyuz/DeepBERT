@@ -12,7 +12,7 @@ def Calculate_Deep(v, z):
     return result
 
 
-def mergeReview_Rating(path, filename, svd, reviewer_feature_dict, item_feature_dict, getEmbedding, method_name):
+def mergeReview_Rating(path, filename, svd, reviewer_feature_dict, item_feature_dict, getEmbedding):
     reviewerID,_ = read_csv_file(path)
     feature_dict = {}
     review_feature_list = []
@@ -29,7 +29,7 @@ def mergeReview_Rating(path, filename, svd, reviewer_feature_dict, item_feature_
         feature_dict[id] = z
         review_feature_list.append(A)
         rating_feature_list.append(B)
-    create_and_write_csv(filename, feature_dict, method_name)
+    create_and_write_csv(filename, feature_dict)
     return feature_dict
 
 

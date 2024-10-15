@@ -4,24 +4,6 @@ import nltk
 nltk.download('wordnet')
 nltk.download('sentiwordnet')
 
-class config:
-    dataset_name='reviewAmazon'
-    user_length = 0
-    item_length = 0
-    data_path='feature/allFeatureReview.csv'
-    data_feature='data/final_data_feature.csv'
-    model_name='deepcgsr'
-    k_topic = 10
-    epoch=100
-    learning_rate=0.01
-    batch_size=32
-    weight_decay=1e-6
-    device='cuda:0'
-    save_dir='chkpt'
-    isRemoveOutliner = False
-
-args = config()
-
 class DependencyParser():
     def __init__(self, model_path, parser_path):
         self.model = StanfordDependencyParser(path_to_jar=parser_path, path_to_models_jar=model_path)

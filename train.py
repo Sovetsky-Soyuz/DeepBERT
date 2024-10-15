@@ -1,26 +1,15 @@
-import csv
-import os
-import re
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
 import ast
 import numpy as np
-from math import sqrt
 import tqdm
 from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import LabelEncoder
-from helper.general_functions import create_and_write_csv
+from helper.general_functions import create_and_write_csv, word_segment
 from combine_review_rating import Calculate_Deep, mergeReview_Rating
-from init import args
-# from data_processing import TransformLabel, merge_csv_columns
-from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, f1_score, mean_squared_error, mean_absolute_error
+from sklearn.metrics import accuracy_score, mean_absolute_error
 from review_processing.merge_senmatic_review import extract_features, initialize_features
-from helper.utils import read_data, setup_path, word_segment, convert_string_to_float_list
-# from review_processing.coarse_gain import get_word2vec_model
-# from data_processing import TransformLabel_Deep
+from helper.utils import encode_and_save_csv, map_and_add_column, setup_path
 from rating_processing.svd import initialize_svd
 from rating_processing.factorization_machine import run
 
@@ -45,8 +34,6 @@ class EarlyStopper(object):
             return False
 
 def reprocess_input(data):
-    user_idx = torch.tensor([int(x) for x in data['reviewerID']], dtype=torch.long)
-    item_idx = torch.tensor([int(x) for x in data['itemID']], dtype=torch.long)
     rating = torch.tensor([float(x) for x in data['overall']], dtype=torch.float32)
     item_bias = torch.tensor([float(x) for x in data['item_bias']], dtype=torch.float32)
     user_bias = torch.tensor([float(x) for x in data['user_bias']], dtype=torch.float32)
@@ -72,8 +59,7 @@ def reprocess_input(data):
     user_feature = torch.stack(user_feature)
     item_feature = torch.stack(item_feature)
     
-    return user_idx, item_idx, rating, user_feature, item_feature, item_bias, user_bias
-
+    return rating, user_feature, item_feature, item_bias, user_bias
 
 def calculate_rmse(y_true, y_pred):
     y_true_np = np.array(y_true)
@@ -93,12 +79,9 @@ class FullyConnectedModel(nn.Module):
         self.fc = nn.Linear(input_dim, output_dim, bias=True)
         self.global_bias = nn.Parameter(torch.zeros(1))
 
-    def forward(self, user_indices, item_indices, user_features, item_features, item_bias, user_bias):
-        # user_features = torch.tensor(user_features)
-        # item_features = torch.tensor(item_features)
+    def forward(self, user_features, item_features, item_bias, user_bias):
         interaction = user_features * item_features
         interaction_sum = interaction.sum(dim=1)
-        # print("interaction_sum: ", interaction_sum.size())
         if(len(interaction_sum.size()) != self.input_dim):
             self.fc = nn.Linear(len(interaction_sum), len(interaction_sum), bias=True)
             
@@ -113,7 +96,7 @@ def train_deepbert(train_data_loader, valid_data_loader, num_factors, batch_size
     model = FullyConnectedModel(input_dim=batch_size, output_dim=num_factors)
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.09)
-    early_stopper = EarlyStopper(num_trials=5, save_path=f'model/DeepCGSR/chkpt/{method_name}.pt')
+    early_stopper = EarlyStopper(num_trials=5, save_path=f'chkpt/{method_name}.pt')
 
     for epoch in range(epochs):
         model.train()
@@ -121,7 +104,7 @@ def train_deepbert(train_data_loader, valid_data_loader, num_factors, batch_size
         
         for batch_idx, batch in enumerate(train_data_loader):
             try:
-                user_idx, item_idx, rating, user_feature, item_feature, item_bias, user_bias = reprocess_input({
+                rating, user_feature, item_feature, item_bias, user_bias = reprocess_input({
                     'reviewerID': batch[0],
                     'itemID': batch[1],
                     'overall': batch[2],
@@ -131,7 +114,7 @@ def train_deepbert(train_data_loader, valid_data_loader, num_factors, batch_size
                     'user_bias': batch[6],
                 })
                 
-                predictions = model(user_idx, item_idx, user_feature, item_feature, item_bias, user_bias)
+                predictions = model(user_feature, item_feature, item_bias, user_bias)
                 print("predictions: ", predictions)
                 # predictions = torch.clamp(predictions, min=1.0, max=5.0)
                 loss = criterion(predictions, rating)
@@ -157,8 +140,6 @@ def train_deepbert(train_data_loader, valid_data_loader, num_factors, batch_size
 
     return model
 
-
-
 def test(model, data_loader):
     model.eval()
     targets, predicts = list(), list()
@@ -174,11 +155,11 @@ def test(model, data_loader):
                 'user_bias': batch[6],
             }
             
-            user_idx, item_idx, target, udeep, ideep, item_bias, user_bias = reprocess_input(data)
+            target, udeep, ideep, item_bias, user_bias = reprocess_input(data)
             udeep = torch.tensor(udeep, dtype=torch.float32) if isinstance(udeep, list) else udeep
             ideep = torch.tensor(ideep, dtype=torch.float32) if isinstance(ideep, list) else ideep
 
-            y = model(user_idx, item_idx, udeep, ideep, item_bias, user_bias)
+            y = model(udeep, ideep, item_bias, user_bias)
             
             targets.extend(target)
             predicts.extend([round(float(pred)) for pred in y.flatten().cpu().numpy()])
@@ -187,6 +168,7 @@ def test(model, data_loader):
     new_predicts = [-1 if i < 4 else 1 for i in predicts]
 
     accuracy = accuracy_score(new_targets, new_predicts)
+    print("Accuracy: ", accuracy)
     return accuracy
 
 def test_rsme(model, data_loader):
@@ -204,8 +186,8 @@ def test_rsme(model, data_loader):
                 'user_bias': batch[6],
             }
             
-            user_idx, item_idx, target, udeep, ideep, item_bias, user_bias = reprocess_input(data)
-            y = model(user_idx, item_idx, udeep, ideep, item_bias, user_bias)
+            target, udeep, ideep, item_bias, user_bias = reprocess_input(data)
+            y = model(udeep, ideep, item_bias, user_bias)
             targets.extend(target)
             predicts.extend([float(pred) for pred in y.flatten().cpu().numpy()])
 
@@ -218,26 +200,6 @@ def test_rsme(model, data_loader):
     mae_value = mean_absolute_error(targets, predicts)
     print("MAE: ", mae_value)
     return calculate_rmse(targets, predicts), mae_value
-
-def format_array(arr):
-    return "[" + ", ".join(map(str, arr)) + "]"
-
-def map_and_add_column(df1, df2, column_df1, column_df2=None, column_to_map=None, new_column_name='new_column'):
-    if isinstance(df2, pd.DataFrame):
-        if column_df2 is None or column_to_map is None:
-            raise ValueError("Cần chỉ định column_df2 và column_to_map khi df2 là DataFrame")
-        map_dict = df2.set_index(column_df2)[column_to_map].to_dict()
-    elif isinstance(df2, dict):
-        map_dict = df2
-    else:
-        raise ValueError("df2 phải là DataFrame hoặc dict")
-
-    df1[new_column_name] = df1[column_df1].map(map_dict)
-    df1[new_column_name] = df1[new_column_name].apply(
-        lambda x: format_array(x) if isinstance(x, (list, np.ndarray)) else x
-    )
-    
-    return df1
 
 def calulate_user_item_bias(allFeatureReviews):
     print("allFeatureReviews: ", allFeatureReviews)
@@ -263,66 +225,24 @@ def calculate_bias(feature_vectors, ratings):
     return bias
 
 
-def parse_array_from_string(array_string):
-    try:
-        if isinstance(array_string, (int, float)):
-            return [float(array_string)]
 
-        array_string = array_string.strip()
-        array_string = re.sub(r'(?<![\d.])e[\d.]+', '', array_string)
-        return ast.literal_eval(array_string)
-    except (ValueError, SyntaxError):
-        return []
-
-def csv_to_dataloader(csv_link, batch_size, shuffle=True):
-    df = pd.read_csv(csv_link)
-
-    df['Udeep'] = df['Udeep'].apply(parse_array_from_string)
-    df['Ideep'] = df['Ideep'].apply(parse_array_from_string)
-    
-    df['reviewerID'] = df['reviewerID'].astype(int)
-    df['itemID'] = df['itemID'].astype(int)
-    
-    reviewerID_tensor = torch.tensor(df['reviewerID'].values, dtype=torch.long)
-    itemID_tensor = torch.tensor(df['itemID'].values, dtype=torch.long)
-    overall_tensor = torch.tensor(df['overall'].values, dtype=torch.float32)
-    Udeep_tensor = torch.tensor(df['Udeep'].tolist(), dtype=torch.float32)
-    Ideep_tensor = torch.tensor(df['Ideep'].tolist(), dtype=torch.float32)
-    itembias_tensor = torch.tensor(df['item_bias'].values, dtype=torch.float32)
-    userbias_tensor = torch.tensor(df['user_bias'].values, dtype=torch.float32)
-    
-    dataset = TensorDataset(reviewerID_tensor, itemID_tensor, overall_tensor, Udeep_tensor, Ideep_tensor, itembias_tensor, userbias_tensor)
-    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=8, shuffle=shuffle)
-    
-    return dataloader
-
-
-def encode_and_save_csv(df, output_path, columns_to_encode):
-    label_encoders = {}
-    for column in columns_to_encode:
-        label_encoders[column] = LabelEncoder()
-        df[column] = label_encoders[column].fit_transform(df[column])
-    df.to_csv(output_path, index=False)
-    return label_encoders
-
-
-# DeepCGSR
-def DeepBERT(dataset_df, num_factors, num_words, filename, method_name="DeepCGSR", is_switch_data=False):
+# DeepBERT
+def DeepBERT(dataset_df, num_factors, num_words, filename):
 
     train_data_list = dataset_df["filteredReviewText"].tolist() 
-    allreviews_path, reviewer_path, item_path, _, _, _, _, final_data_path, svd_path, checkpoint_path, sparse_matrix_path = setup_path(method_name)   
+    allreviews_path, reviewer_path, item_path, _, _, _, _, final_data_path, svd_path, checkpoint_path, sparse_matrix_path = setup_path()   
     split_data = []
 
     for i in train_data_list:
         split_data.append(word_segment(i))
 
 
-    allFeatureReviews = extract_features(dataset_df, split_data, num_factors, num_words, filename, method_name, is_switch_data)
-    reviewer_feature_dict, item_feature_dict = initialize_features(filename, num_factors, method_name)
+    allFeatureReviews = extract_features(dataset_df, split_data, num_factors, num_words, filename)
+    reviewer_feature_dict, item_feature_dict = initialize_features(filename, num_factors)
     
     svd = initialize_svd(allreviews_path + filename + ".csv", num_factors, svd_path + filename +'.pt')
-    z_item = mergeReview_Rating(item_path + filename +".csv", "z_item_" + filename, svd, reviewer_feature_dict, item_feature_dict, "item", method_name)
-    z_review = mergeReview_Rating(reviewer_path + filename +".csv", "z_reviewer_" + filename, svd, reviewer_feature_dict, item_feature_dict, "reviewer", method_name)
+    z_item = mergeReview_Rating(item_path + filename +".csv", "z_item_" + filename, svd, reviewer_feature_dict, item_feature_dict, "item")
+    z_review = mergeReview_Rating(reviewer_path + filename +".csv", "z_reviewer_" + filename, svd, reviewer_feature_dict, item_feature_dict, "reviewer")
     
     v_reviewer_list = []
     v_item_list = []
@@ -344,8 +264,8 @@ def DeepBERT(dataset_df, num_factors, num_words, filename, method_name="DeepCGSR
     for (z_name, z_value), v_value in zip(z_item.items(), v_item_list):
         i_deep[z_name] = Calculate_Deep(z_value, v_value)
         
-    create_and_write_csv("u_deep_" + filename, u_deep, method_name)
-    create_and_write_csv("i_deep_" + filename, i_deep, method_name)
+    create_and_write_csv("u_deep_" + filename, u_deep)
+    create_and_write_csv("i_deep_" + filename, i_deep)
 
     allFeatureReviews = allFeatureReviews[['reviewerID', 'itemID', 'overall']]
     allFeatureReviews = map_and_add_column(allFeatureReviews, u_deep, 'reviewerID', 'Key', 'Array', 'Udeep')
@@ -355,7 +275,7 @@ def DeepBERT(dataset_df, num_factors, num_words, filename, method_name="DeepCGSR
     allFeatureReviews['item_bias'] = item_bias
     allFeatureReviews['user_bias'] = user_bias
     
-    encode_and_save_csv(allFeatureReviews, final_data_path + method_name + "_" + filename +".csv", ['reviewerID', 'itemID'])
+    encode_and_save_csv(allFeatureReviews, final_data_path + "DeepBERT" + "_" + filename +".csv", ['reviewerID', 'itemID'])
     
 
 

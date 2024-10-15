@@ -1,7 +1,6 @@
 import os
 import tqdm
 import torch
-import numpy as np
 import pandas as pd
 from helper.general_functions import create_and_write_csv, load_data_from_csv, split_text
 from init import dep_parser
@@ -30,9 +29,8 @@ def merge_fine_coarse_features(data_df, num_factors, groupBy="reviewerID"):
         
     return feature_dict
 
-
 # Extract fine-grained and coarse-grained features
-def extract_review_feature(data_df, dictionary, model, dep_parser, tokenizer, topic_word_matrix, word2vec_model, num_topics, method_name="DeepCGSR", is_switch_data=False):
+def extract_review_feature(data_df, model, dep_parser, tokenizer, topic_word_matrix, num_topics):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     model = model.to(device)  
 
@@ -92,21 +90,20 @@ reviewer_feature_dict = {}
 item_feature_dict = {}
 allFeatureReview = pd.DataFrame(columns=['reviewerID', 'itemID', 'overall', 'unixReviewTime', 'fine_feature', 'coarse_feature'])
 
-def initialize_features(filename, num_factors, method_name):
+def initialize_features(filename, num_factors):
     # print("Initialize features")
     global reviewer_feature_dict, item_feature_dict
     allreviews_path = "feature/allFeatureReview_"
     reviewer_path = "/feature/reviewer_feature_"
     item_path = "feature/item_feature_"
-    dictory_path = "feature"
-
+    
     # Initialize or load reviewer features
     if os.path.exists(reviewer_path + filename +".csv"):
         reviewer_feature_dict = load_data_from_csv(reviewer_path + filename +".csv")
     else:
         allFeatureReview = pd.read_csv(allreviews_path + filename +".csv")
         reviewer_feature_dict = merge_fine_coarse_features(allFeatureReview, num_factors, groupBy="reviewerID")
-        create_and_write_csv("reviewer_feature_" + filename, reviewer_feature_dict, method_name)
+        create_and_write_csv("reviewer_feature_" + filename, reviewer_feature_dict)
         
     # Initialize or load item features
     if os.path.exists(item_path+ filename +".csv"):
@@ -114,15 +111,15 @@ def initialize_features(filename, num_factors, method_name):
     else:
         allFeatureReview = pd.read_csv(allreviews_path+ filename +".csv")
         item_feature_dict = merge_fine_coarse_features(allFeatureReview, num_factors, groupBy="itemID")
-        create_and_write_csv("item_feature_" + filename, item_feature_dict, method_name)
+        create_and_write_csv("item_feature_" + filename, item_feature_dict)
     return reviewer_feature_dict, item_feature_dict
         
-def extract_features(data_df, split_data, word2vec_model, num_topics, num_words, filename, method_name, is_switch_data=False):
-    allreviews_path = "model/DeepCGSR/feature/allFeatureReview_"
+def extract_features(data_df, split_data, num_topics, num_words, filename):
+    allreviews_path = "feature/allFeatureReview_"
     if os.path.exists(allreviews_path + filename +".csv"):
         allFeatureReview = pd.read_csv(allreviews_path + filename +".csv")
     else:
-        embeddings, model, kmeans, dictionary, tokenizer, topic_word_matrix = get_tbert_model(data_df, split_data, num_topics, num_words, cluster_method="Birch")
-        allFeatureReview = extract_review_feature(data_df, dictionary, model, dep_parser, tokenizer, topic_word_matrix, word2vec_model, num_topics, method_name, is_switch_data)
+        model, tokenizer, topic_word_matrix = get_tbert_model(data_df, split_data, num_topics, num_words, cluster_method="Birch")
+        allFeatureReview = extract_review_feature(data_df, model, dep_parser, tokenizer, topic_word_matrix, num_topics)
         allFeatureReview.to_csv(allreviews_path + filename +".csv", index=False)
     return allFeatureReview

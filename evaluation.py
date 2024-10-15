@@ -4,10 +4,8 @@ import pandas as pd
 from torch.utils.data import DataLoader, Dataset, random_split
 from sklearn.model_selection import train_test_split
 from helper.general_functions import save_to_excel
-from helper.utils import dataloader_to_dataframe, read_data, word_segment, backup_and_delete_files
-# from model.DeepCGSR.train import DeepCGSR
-# from review_processing.coarse_gain import get_word2vec_model
-from train import DeepBERT, csv_to_dataloader, test, test_rsme, train_deepbert
+from helper.utils import csv_to_dataloader, read_data
+from train import DeepBERT, test, test_rsme, train_deepbert
 
 
 # from model.DeepCGSR.train import train
@@ -64,8 +62,8 @@ def create_dataframes(json_file, train_ratio=0.7, valid_ratio=0.1, test_ratio=0.
 dataset_name = ["Small_All_Beauty_5"]
 batch_size = 32
 num_epochs = 100
-list_factors = [40, 16]
-num_words = 300
+list_factors = [40]
+num_words = 200
 is_switch_data = True
 rsme_MFFR = 0
 mae_MFFR = 0
@@ -75,19 +73,18 @@ for dataset in dataset_name:
         json_file = "data/" + dataset + ".json"
         all_df, train_df, valid_df, test_df = create_dataframes(json_file)
 
-        #region DeepCGSR 
-
-        method_name = ["triet_method"]
+    #region DeepCGSR 
+        method_name = ["DeepBERT"]
         for method in method_name:
             print("Method: ", method)
             
-            DeepBERT(train_df, num_factors, num_words, "train", method, is_switch_data)
-            DeepBERT(valid_df, num_factors, num_words, "vaild", method, is_switch_data)
-            DeepBERT(test_df, num_factors, num_words, "test", method, is_switch_data)
+            DeepBERT(train_df, num_factors, num_words, "train")
+            DeepBERT(valid_df, num_factors, num_words, "vaild")
+            DeepBERT(test_df, num_factors, num_words, "test")
 
-            final_feature_train_path = "model/DeepCGSR/data/final_data_feature_" + method + "_train.csv"
-            final_feature_valid_path = "model/DeepCGSR/data/final_data_feature_" + method + "_train.csv"
-            final_feature_test_path = "model/DeepCGSR/data/final_data_feature_" + method + "_test.csv"
+            final_feature_train_path = "data/final_data_feature_" + method + "_train.csv"
+            final_feature_valid_path = "data/final_data_feature_" + method + "_train.csv"
+            final_feature_test_path = "data/final_data_feature_" + method + "_test.csv"
 
             train_data_loader = csv_to_dataloader(final_feature_train_path, batch_size)
             valid_data_loader = csv_to_dataloader(final_feature_valid_path, batch_size)
@@ -98,14 +95,8 @@ for dataset in dataset_name:
             rsme_test, mae_test = test_rsme(model_deep, test_data_loader)
             DeepCGSR_results = [auc_test, rsme_test, mae_test]
             
-            save_to_excel([DeepCGSR_results], ['AUC', 'RSME Test', 'MAE Test'], "model/results/"+ method + "_" + dataset + "_factors" + str(num_factors) + ".xlsx")
+            save_to_excel([DeepCGSR_results], ['AUC', 'RSME Test', 'MAE Test'], "results/"+ method + "_" + dataset + "_factors" + str(num_factors) + ".xlsx")
         #endregion
 
-            
-        backup_and_delete_files("model/DeepCGSR/feature", "model/DeepCGSR/backup", "BKfeature", "290824", extensions=[".csv"])
-        backup_and_delete_files("model/DeepCGSR/feature_originalmethod", "model/DeepCGSR/backup", "BKfeature_originalmethod", "290824", extensions=[".csv"])
-        backup_and_delete_files("model/DeepCGSR/data", "model/DeepCGSR/backup", "BKdata", "290824", extensions=[".csv"])
-        backup_and_delete_files("model/DeepCGSR/chkpt", "model/DeepCGSR/backup", "BK_chkpt", "290824", True, extensions=[".pt", ".pkl", "npz"])
-        backup_and_delete_files("model/DeepCGSR/output", "model/DeepCGSR/backup", "BK_output", "290824", extensions=[".model"])
 
 
